@@ -1,28 +1,30 @@
 import multiprocessing
 import grpc
 import time
+import queue
 from threading import Thread
-from loguru import logger 
+from loguru import logger
 from proto import command_pb2, command_pb2_grpc
 
 
-
 class PipedRpcStreamProcess(multiprocessing.Process):
-    def __init__(self, command:str, addr_ip: str, *args, **kwargs):
-        super().__init__(*args, **kwargs) 
+    def __init__(self, command: str, addr_ip: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.command = command
         self.addr_ip = addr_ip
         self.msgQ = multiprocessing.Queue()
 
-        self.oK = multiprocessing.Event() 
+        self.oK = multiprocessing.Event()
 
     def run(self):
         with grpc.insecure_channel(self.addr_ip) as channel:
             stub = command_pb2_grpc.CommandStub(channel)
-            response = stub.ExecuteStream(command_pb2.CommandRequest(command=self.command))
+            response = stub.ExecuteStream(
+                command_pb2.CommandRequest(command=self.command)
+            )
             returncode = 0
             for stream in response:
-                returncode = stream.returncode 
+                returncode = stream.returncode
                 self.msgQ.put(stream.stdout)
                 if stream.stderr != None and stream.stderr != "":
                     self.msgQ.put(stream.stderr)
@@ -31,9 +33,9 @@ class PipedRpcStreamProcess(multiprocessing.Process):
 
     def stop(self):
         if self.oK.is_set():
-            super().join() 
+            super().join()
         else:
-            super().terminate() 
+            super().terminate()
 
     def msgq(self):
         return self.msgQ
@@ -41,20 +43,24 @@ class PipedRpcStreamProcess(multiprocessing.Process):
     def ok(self) -> bool:
         return self.oK.is_set()
 
-def rpc(command: str, addr_ip: str = 'localhost:50051'):
+
+def rpc(command: str, addr_ip: str = "localhost:50051"):
     with grpc.insecure_channel(addr_ip) as channel:
         stub = command_pb2_grpc.CommandStub(channel)
         response = stub.Execute(command_pb2.CommandRequest(command=command))
-        print(f"Greeter client received: \n{response.returncode} \n{response.stdout} \n{response.stderr}")
-        return response.returncode,response.stdout,response.stderr
+        print(
+            f"Greeter client received: \n{response.returncode} \n{response.stdout} \n{response.stderr}"
+        )
+        return response.returncode, response.stdout, response.stderr
 
-def rpc_bg(command: str, addr_ip:str = 'localhost:50051'):
+
+def rpc_bg(command: str, addr_ip: str = "localhost:50051"):
     p = PipedRpcStreamProcess(command=command, addr_ip=addr_ip)
-    p.start()  
-    return p 
+    p.start()
+    return p
 
 
-def wait_rpc_ready(channel, timeout = 10):
+def wait_rpc_ready(channel, timeout=10):
     """
     等待 gRPC 服务器就绪（带超时）
     :param channel: grpc.Channel
@@ -63,13 +69,14 @@ def wait_rpc_ready(channel, timeout = 10):
     """
     try:
         grpc.channel_ready_future(channel).result(timeout=timeout)
-        return True 
+        return True
     except grpc.FutureTimeoutError:
         logger.info("gRPC 服务器连接超时（{timeout}秒）")
-        return False 
+        return False
     except Exception as e:
         logger.info("gRPC 服务器连接失败: {str(e)}")
-        return False 
+        return False
+
 
 def rpc_echo_test(addr_ip, timeout=10):
     """
@@ -84,35 +91,38 @@ def rpc_echo_test(addr_ip, timeout=10):
             return False
         stub = command_pb2_grpc.CommandStub(channel)
         try:
-            response = stub.Execute(command_pb2.CommandRequest(command='echo $USER'), timeout=2)
+            response = stub.Execute(
+                command_pb2.CommandRequest(command="echo $USER"), timeout=2
+            )
             if response.returncode == 0:
                 logger.info(f"rpc USER: {response.stdout.strip()}")
                 if response.stdout.strip() == "smtbf":
-                    return True 
+                    return True
                 elif response.stdout.strip() == "fanyx":
-                    return True 
+                    return True
                 elif response.stdout.strip() == "bytedance":
-                    return True 
+                    return True
                 else:
                     logger.warning(f"rpc USER: {response.stdout.strip()}")
-                    return True 
+                    return True
             else:
                 logger.error(f"rpc returncode: {response.returncode}")
-            return False 
+            return False
         except grpc.RpcError as e:
             logger.info(f"gRPC 服务器未响应: {str(e)}")
             return False
     except Exception as e:
         logger.info(f"gRPC 客户端创建失败: {str(e)}")
-        return False 
+        return False
 
-import queue 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     assert rpc_echo_test("localhost:50051", timeout=2)
     ret = rpc("ls -la $HOME")
-    p = rpc_bg("sleep 2; echo finished", 'localhost:50051')
-    
+    p = rpc_bg("sleep 2; echo finished", "localhost:50051")
+
     q = p.msgq()
+
     def work():
         while True:
             if not p.is_alive():
@@ -126,9 +136,8 @@ if __name__ == '__main__':
                 print(f"Received: {msg.strip()}")
             except queue.Empty:
                 continue
+
     Thread(target=work).start()
     time.sleep(3)
     p.stop()
     time.sleep(3)
-
-

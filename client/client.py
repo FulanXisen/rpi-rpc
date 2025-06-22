@@ -1,196 +1,134 @@
-from io import StringIO
 import multiprocessing
-from threading import Thread
 import grpc
-import sys
-from typing import Iterator, Optional
-
+import time
+from threading import Thread
+from loguru import logger 
 from proto import command_pb2, command_pb2_grpc
 
-from loguru import logger 
-# class CommandClient:
-#     """
-#     gRPC 命令服务客户端
-#
-#     提供两种使用模式:
-#     1. 执行单次命令
-#     2. 交互式会话(保持状态)
-#     """
-#
-#     def __init__(self, host: str = 'localhost', port: int = 50051):
-#         """
-#         初始化客户端
-#
-#         参数:
-#             host: 服务器主机名
-#             port: 服务器端口
-#         """
-#         self.channel = grpc.insecure_channel(f'{host}:{port}')
-#         self.stub = command_pb2_grpc.CommandServiceStub(self.channel)
-#
-#     def execute_command(self, command: str) -> Optional[tuple]:
-#         """
-#         执行单次命令
-#
-#         参数:
-#             command: 要执行的命令
-#
-#         返回:
-#             (return_code, stdout, stderr) 元组或None(出错时)
-#         """
-#         try:
-#             response = self.stub.ExecuteCommand(
-#                 command_pb2.CommandRequest(command=command)
-#             )
-#             return response.return_code, response.stdout, response.stderr
-#         except grpc.RpcError as e:
-#             print(f"RPC failed: {e.code()}: {e.details()}", file=sys.stderr)
-#             return None
-#
-#     def interactive_session(self) -> int:
-#         """
-#         启动交互式会话
-#
-#         返回:
-#             退出状态码
-#         """
-#         print("Starting interactive session (type 'exit' to quit)")
-#
-#         def command_generator() -> Iterator[command_pb2.CommandRequest]:
-#             """
-#             生成命令请求的生成器函数
-#             """
-#             try:
-#                 while True:
-#                     try:
-#                         command = input("$ ")
-#                         if not command.strip():
-#                             continue
-#                         if command.lower() == 'exit':
-#                             break
-#                         yield command_pb2.CommandRequest(command=command)
-#                     except EOFError:
-#                         break
-#                     except KeyboardInterrupt:
-#                         print("^C")
-#                         continue
-#             except Exception as e:
-#                 print(f"Input error: {str(e)}", file=sys.stderr)
-#
-#         try:
-#             # 启动会话
-#             response_stream = self.stub.CommandSession(command_generator())
-#
-#             # 处理响应流
-#             for response in response_stream:
-#                 if not response.session_active:
-#                     print("Session ended by server")
-#                     break
-#
-#                 if response.stdout:
-#                     print(response.stdout, end='')
-#                 if response.stderr:
-#                     print(response.stderr, end='', file=sys.stderr)
-#
-#             return 0
-#
-#         except grpc.RpcError as e:
-#             print(f"\nSession error: {e.code()}: {e.details()}", file=sys.stderr)
-#             return 1
-#
-#     def close(self):
-#         """关闭客户端连接"""
-#         self.channel.close()
-#
-# def main():
-#     """客户端主入口"""
-#     import argparse
-#
-#     parser = argparse.ArgumentParser(description='gRPC Command Client')
-#     parser.add_argument('-c', '--command', help='Execute single command')
-#     args = parser.parse_args()
-#
-#     client = CommandClient()
-#
-#     try:
-#         if args.command:
-#             # 单次命令模式
-#             result = client.execute_command(args.command)
-#             if result:
-#                 return_code, stdout, stderr = result
-#                 print(stdout, end='')
-#                 print(stderr, end='', file=sys.stderr)
-#                 sys.exit(return_code)
-#         else:
-#             # 交互式模式
-#             sys.exit(client.interactive_session())
-#     finally:
-#         client.close()
-#
-# if __name__ == '__main__':
-#     main()
-#
-#
-#
 
-import time
-from multiprocessing import Process
 
-class PipedProcess(multiprocessing.Process):
-    def __init__(self):
-        super().__init__() 
-         
+class PipedRpcStreamProcess(multiprocessing.Process):
+    def __init__(self, command:str, addr_ip: str, *args, **kwargs):
+        super().__init__(*args, **kwargs) 
+        self.command = command
+        self.addr_ip = addr_ip
+        self.msgQ = multiprocessing.Queue()
+
+        self.oK = multiprocessing.Event() 
 
     def run(self):
-        #sys.stdout = self.output_buffer 
-        #sys.stderr = self.output_buffer 
-        pass 
+        with grpc.insecure_channel(self.addr_ip) as channel:
+            stub = command_pb2_grpc.CommandStub(channel)
+            response = stub.ExecuteStream(command_pb2.CommandRequest(command=self.command))
+            returncode = 0
+            for stream in response:
+                returncode = stream.returncode 
+                self.msgQ.put(stream.stdout)
+                if stream.stderr != None and stream.stderr != "":
+                    self.msgQ.put(stream.stderr)
+            self.msgQ.put(f"returncode: {returncode}")
+            self.oK.set()
 
-def rpc(command: str):
-    with grpc.insecure_channel('localhost:50051') as channel:
+    def stop(self):
+        if self.oK.is_set():
+            super().join() 
+        else:
+            super().terminate() 
+
+    def msgq(self):
+        return self.msgQ
+
+    def ok(self) -> bool:
+        return self.oK.is_set()
+
+def rpc(command: str, addr_ip: str = 'localhost:50051'):
+    with grpc.insecure_channel(addr_ip) as channel:
         stub = command_pb2_grpc.CommandStub(channel)
         response = stub.Execute(command_pb2.CommandRequest(command=command))
         print(f"Greeter client received: \n{response.returncode} \n{response.stdout} \n{response.stderr}")
         return response.returncode,response.stdout,response.stderr
 
-def rpc_bg_inner(command:str, tx=None):
-    # sys.stdout = tx
-    with grpc.insecure_channel('localhost:50051') as channel:
-        stub = command_pb2_grpc.CommandStub(channel)
-        response = stub.ExecuteStream(command_pb2.CommandRequest(command=command))
-        for stream in response:
-            print(f"stream received: returncode:{stream.returncode}")
-            print(f"stdout:{stream.stdout}")
-            print(f"stderr:{stream.stderr}")
-    tx.close()
-
-def rpc_bg(command: str):
-    p = Process(target=rpc_bg_inner, args=[command,])
+def rpc_bg(command: str, addr_ip:str = 'localhost:50051'):
+    p = PipedRpcStreamProcess(command=command, addr_ip=addr_ip)
     p.start()  
     return p 
 
-class ExecRemoteCommand(Process):
-    def __init__(self):
-        super().__init__()
 
-    def run(self):
-        def work():
-            with grpc.insecure_channel('localhost:50051') as channel:
-                stub = command_pb2_grpc.CommandStub(channel)
-                response = stub.Execute(command_pb2.CommandRequest(command='ls '))
-                print(f"Greeter client received: \n{response.returncode} \n{response.stdout} \n{response.stderr}")
-                response = stub.ExecuteStream(command_pb2.CommandRequest(command="for i in {1..5} ; do sleep 1; echo 1; done"))
-                for stream in response:
-                    print(f"stream received: returncode:{stream.returncode}")
-                    print(f"stdout:{stream.stdout}")
-                    print(f"stderr:{stream.stderr}")
-        Thread(target=work).start()
+def wait_rpc_ready(channel, timeout = 10):
+    """
+    等待 gRPC 服务器就绪（带超时）
+    :param channel: grpc.Channel
+    :param timeout: 超时时间（秒）
+    :return: True 如果服务器就绪，False 如果超时
+    """
+    try:
+        grpc.channel_ready_future(channel).result(timeout=timeout)
+        return True 
+    except grpc.FutureTimeoutError:
+        logger.info("gRPC 服务器连接超时（{timeout}秒）")
+        return False 
+    except Exception as e:
+        logger.info("gRPC 服务器连接失败: {str(e)}")
+        return False 
 
+def rpc_echo_test(addr_ip, timeout=10):
+    """
+    创建 gRPC 客户端并检查服务器是否就绪
+    :param server_address: 服务器地址（如 "localhost:50051"）
+    :param timeout: 超时时间（秒）
+    :return: True 或 False 如果连接失败
+    """
+    try:
+        channel = grpc.insecure_channel(addr_ip)
+        if not wait_rpc_ready(channel, timeout):
+            return False
+        stub = command_pb2_grpc.CommandStub(channel)
+        try:
+            response = stub.Execute(command_pb2.CommandRequest(command='echo $USER'), timeout=2)
+            if response.returncode == 0:
+                logger.info(f"rpc USER: {response.stdout.strip()}")
+                if response.stdout.strip() == "smtbf":
+                    return True 
+                elif response.stdout.strip() == "fanyx":
+                    return True 
+                elif response.stdout.strip() == "bytedance":
+                    return True 
+                else:
+                    logger.warning(f"rpc USER: {response.stdout.strip()}")
+                    return True 
+            else:
+                logger.error(f"rpc returncode: {response.returncode}")
+            return False 
+        except grpc.RpcError as e:
+            logger.info(f"gRPC 服务器未响应: {str(e)}")
+            return False
+    except Exception as e:
+        logger.info(f"gRPC 客户端创建失败: {str(e)}")
+        return False 
+
+import queue 
 if __name__ == '__main__':
-    # rpc("")
-    # p = rpc_bg("afplay ~/Music/本地音乐/5_20AM\ -\ soldier\ \(1\).flac")
-    # time.sleep(2)
-    # p.kill()
-    p = rpc_bg("ffmpeg -y -f avfoundation -i ':0' output.wav")
-    time.sleep(5)
-    p.kill()
+    assert rpc_echo_test("localhost:50051", timeout=2)
+    ret = rpc("ls -la $HOME")
+    p = rpc_bg("sleep 2; echo finished", 'localhost:50051')
+    
+    q = p.msgq()
+    def work():
+        while True:
+            if not p.is_alive():
+                logger.debug("p not alive")
+                break
+            if p.ok():
+                logger.debug("p is ok")
+                break
+            try:
+                msg = q.get(timeout=1)
+                print(f"Received: {msg.strip()}")
+            except queue.Empty:
+                continue
+    Thread(target=work).start()
+    time.sleep(3)
+    p.stop()
+    time.sleep(3)
+
+

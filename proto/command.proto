@@ -8,22 +8,16 @@ option objc_class_prefix = "HLW";
 package rpi.command;
 
 service Command {
-    // 单次命令执行 - 每次调用启动独立进程
     rpc Execute (CommandRequest) returns (CommandResponse) {}
-    
-    // 
     rpc ExecuteStream (CommandRequest) returns (stream CommandResponse) {}
-    // 交互式会话 - 保持环境状态的持久会话
-    // rpc CommandSession (stream CommandRequest) returns (stream CommandResponse);
 }
 
 message CommandRequest {
-    string command = 1;  // 要执行的shell命令
+    string command = 1;  // shell command
 }
 
 message CommandResponse {
-    int32 returncode = 1;    // 命令返回码
+    int32 returncode = 1;     // shell returncode
     string stdout = 2;        // 标准输出内容
     string stderr = 3;        // 标准错误内容
-    // bool session_active = 4;  // 会话是否仍然活跃
 }

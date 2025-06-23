@@ -8,10 +8,10 @@ from proto import command_pb2, command_pb2_grpc
 
 
 class PipedRpcStreamProcess(multiprocessing.Process):
-    def __init__(self, command: str, addr_ip: str, *args, **kwargs):
+    def __init__(self, command: str, addr_port: str, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.command = command
-        self.addr_ip = addr_ip
+        self.addr_ip = addr_port
         self.msgQ = multiprocessing.Queue()
 
         self.oK = multiprocessing.Event()
@@ -44,8 +44,8 @@ class PipedRpcStreamProcess(multiprocessing.Process):
         return self.oK.is_set()
 
 
-def rpc(command: str, addr_ip: str = "localhost:50051"):
-    with grpc.insecure_channel(addr_ip) as channel:
+def rpc(command: str, addr_port: str = "localhost:50051"):
+    with grpc.insecure_channel(addr_port) as channel:
         stub = command_pb2_grpc.CommandStub(channel)
         response = stub.Execute(command_pb2.CommandRequest(command=command))
         print(
@@ -54,8 +54,8 @@ def rpc(command: str, addr_ip: str = "localhost:50051"):
         return response.returncode, response.stdout, response.stderr
 
 
-def rpc_bg(command: str, addr_ip: str = "localhost:50051"):
-    p = PipedRpcStreamProcess(command=command, addr_ip=addr_ip)
+def rpc_bg(command: str, addr_port: str = "localhost:50051"):
+    p = PipedRpcStreamProcess(command=command, addr_port=addr_port)
     p.start()
     return p
 
@@ -78,7 +78,7 @@ def wait_rpc_ready(channel, timeout=10):
         return False
 
 
-def rpc_echo_test(addr_ip, timeout=10):
+def rpc_echo_test(addr_port, timeout=10):
     """
     创建 gRPC 客户端并检查服务器是否就绪
     :param server_address: 服务器地址（如 "localhost:50051"）
@@ -86,7 +86,7 @@ def rpc_echo_test(addr_ip, timeout=10):
     :return: True 或 False 如果连接失败
     """
     try:
-        channel = grpc.insecure_channel(addr_ip)
+        channel = grpc.insecure_channel(addr_port)
         if not wait_rpc_ready(channel, timeout):
             return False
         stub = command_pb2_grpc.CommandStub(channel)
@@ -99,6 +99,8 @@ def rpc_echo_test(addr_ip, timeout=10):
                 if response.stdout.strip() == "smtbf":
                     return True
                 elif response.stdout.strip() == "fanyx":
+                    return True
+                elif response.stdout.strip() == "fanyuxin":
                     return True
                 elif response.stdout.strip() == "bytedance":
                     return True

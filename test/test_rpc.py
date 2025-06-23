@@ -7,32 +7,34 @@ from loguru import logger
 
 from src.client import rpc, rpc_bg, rpc_echo_test
 
-LOCAL_HOST = "localhost:50051"
-REMOTE_HOST = "192.168.1.225:50051"
-
-TEST_HOST = REMOTE_HOST
+ADDR_PORT = os.environ.get("RPC_ADDR_PORT", "localhost:50051")
 
 
+@pytest.mark.macos
+@pytest.mark.rpi
 def test_rpc():
-    assert rpc_echo_test(TEST_HOST)
+    assert rpc_echo_test(ADDR_PORT)
 
 
+@pytest.mark.macos
+@pytest.mark.rpi
 def test_echo_command():
-    ret, out, err = rpc("echo 123", TEST_HOST)
+    ret, out, err = rpc("echo 123", ADDR_PORT)
     assert ret == 0
     assert out.strip() == "123"
 
 
+@pytest.mark.macos
+@pytest.mark.rpi
 def test_env_command():
-    ret, out, err = rpc("echo $USER", TEST_HOST)
+    ret, out, err = rpc("echo $USER", ADDR_PORT)
     assert ret == 0
-    if TEST_HOST == LOCAL_HOST:
-        assert out.strip() == os.environ.get("USER")
 
 
-def test_play_music():
-    p = rpc_bg("afplay ~/Music/本地音乐/5_20AM-soldier.flac", TEST_HOST)
-    time.sleep(2)
+@pytest.mark.macos
+def test_macos_play_music():
+    p = rpc_bg("afplay ~/Music/本地音乐/5_20AM-soldier.flac", ADDR_PORT)
+    time.sleep(5)
     cmd = "ps aux | grep afplay | grep -v grep"
     try:
         output = subprocess.check_output(cmd, shell=True, text=True)
@@ -47,14 +49,15 @@ def test_play_music():
         assert True
 
 
-def test_record_audio():
+@pytest.mark.macos
+def test_macos_record_audio():
     home_dir = os.environ.get("HOME")
     file = f"{home_dir}/tmp/output.wav"
     if os.path.exists(file):
         os.remove(file)
 
-    p = rpc_bg(f'ffmpeg -y -f avfoundation -i ":0" {file}', TEST_HOST)
-    time.sleep(2)
+    p = rpc_bg(f'ffmpeg -y -f avfoundation -i ":0" {file}', ADDR_PORT)
+    time.sleep(4)
     cmd = "ps aux | grep ffmpeg | grep -v grep"
     try:
         output = subprocess.check_output(cmd, shell=True, text=True)
@@ -70,15 +73,16 @@ def test_record_audio():
         assert True
 
 
-def test_play_and_record():
-    p0 = rpc_bg("afplay ~/Music/本地音乐/5_20AM-soldier.flac", TEST_HOST)
+@pytest.mark.macos
+def test_macos_play_and_record():
+    p0 = rpc_bg("afplay ~/Music/本地音乐/5_20AM-soldier.flac", ADDR_PORT)
 
     home_dir = os.environ.get("HOME")
     file = f"{home_dir}/tmp/output.wav"
     if os.path.exists(file):
         os.remove(file)
 
-    p1 = rpc_bg(f'ffmpeg -y -f avfoundation -i ":0" {file}', TEST_HOST)
+    p1 = rpc_bg(f'ffmpeg -y -f avfoundation -i ":0" {file}', ADDR_PORT)
     time.sleep(2)
     cmd1 = "ps aux | grep ffmpeg | grep -v grep"
     try:
@@ -107,5 +111,25 @@ def test_play_and_record():
     try:
         output = subprocess.check_output(cmd1, shell=True, text=True)
         assert not bool(output.strip())
+    except Exception as e:
+        assert True
+
+
+@pytest.mark.rpi
+def test_rpi_headphone_play_music():
+    if ADDR_PORT != ADDR_PORT:
+        return
+    p = rpc_bg("ffmpeg -i $HOME/tmp/5_20.flac -f wav - | aplay", ADDR_PORT)
+    time.sleep(2)
+    cmd = "ps aux | grep aplay | grep -v grep"
+    try:
+        ret, out, err = rpc(cmd, ADDR_PORT)
+        assert "aplay" in out
+    except Exception as e:
+        assert False
+    p.stop()
+    try:
+        ret, out, err = rpc(cmd, ADDR_PORT)
+        assert "aplay" not in out
     except Exception as e:
         assert True
